@@ -1,0 +1,252 @@
+/* Header height is a root token so layouts that sit under the header (e.g. the
+   admin dashboard's fixed-height workspace) can size against it. */
+:root { --support-master-header-h: clamp(184px, 10vw, 240px); }
+
+/* Dashboard banner header (approved artwork, 2172 x 224): its height follows the
+   artwork's own ratio, with a usable minimum below the large breakpoint. */
+:root { --support-banner-header-h: max(112px, calc(100vw * 224 / 2172)); }
+@media (min-width: 640px) { :root { --support-banner-header-h: max(140px, calc(100vw * 224 / 2172)); } }
+@media (min-width: 1024px) { :root { --support-banner-header-h: calc(100vw * 224 / 2172); } }
+
+@media (max-width: 900px) { :root { --support-master-header-h: 160px; } }
+@media (max-width: 640px) { :root { --support-master-header-h: 144px; } }
+
+.support-master-header {
+  /* Everything scales from two values: the header height and the page content
+     width (kept in sync with --si-content in InquiryDetails.css). */
+  --smh-h: var(--support-master-header-h);
+  --smh-content: min(clamp(1100px, 74vw, 1560px), calc(100vw - 64px));
+  /* The portrait photo (1086x1448) is drawn 2.5x the header height. */
+  --smh-photo-h: calc(var(--smh-h) * 2.5);
+  --smh-photo-w: calc(var(--smh-h) * 1.875);
+  /* Crest sits ~0.52 header-heights into the photo; align it with the content edge. */
+  --smh-photo-left: max(0px, calc((100vw - var(--smh-content)) / 2 - var(--smh-h) * .52));
+
+  position: relative;
+  height: var(--smh-h);
+  overflow: hidden;
+  background:
+    radial-gradient(120% 140% at 18% 0%, rgba(120, 140, 255, .5) 0%, transparent 55%),
+    linear-gradient(100deg, #4d3ad8 0%, #3a1fc4 38%, #2a12a0 70%, #1c0a6e 100%);
+}
+
+/* Soft, blurred extension of the campus photo that fills the space to the left
+   of the logo, so the photo blends in from the page edge instead of floating. */
+.support-master-header::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: -16px;
+  bottom: -16px;
+  left: -16px;
+  width: calc(var(--smh-photo-left) + var(--smh-photo-w) * .6 + 16px);
+  /* Top of the photo only (sky + roofline): the crest starts ~28% down, so it never shows twice. */
+  background: url("/support-campus.png") center 0% / cover no-repeat;
+  filter: blur(5px) saturate(1.05);
+  opacity: .6;
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 55%, transparent 100%);
+  mask-image: linear-gradient(90deg, #000 0%, #000 55%, transparent 100%);
+}
+
+.support-master-header__photo,
+.support-master-header__tint {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+}
+
+/* Sharp campus photo with the crest; faded on both sides into the header. */
+.support-master-header__photo {
+  left: var(--smh-photo-left);
+  width: var(--smh-photo-w);
+  background-image: url("/support-campus.png");
+  background-repeat: no-repeat;
+  background-position: 0 calc(var(--smh-h) * -.565);
+  background-size: var(--smh-photo-w) var(--smh-photo-h);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 14%, #000 70%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 14%, #000 70%, transparent 100%);
+}
+
+.support-master-header__tint {
+  left: 0;
+  right: 0;
+  background:
+    linear-gradient(180deg, rgba(24, 8, 89, 0) 55%, rgba(24, 8, 89, .25) 100%),
+    linear-gradient(
+      90deg,
+      rgba(55, 25, 161, 0) 0%,
+      rgba(55, 25, 161, 0) calc(var(--smh-photo-left) + var(--smh-photo-w) * .8),
+      rgba(49, 22, 151, .55) calc(var(--smh-photo-left) + var(--smh-photo-w) * 1.5),
+      rgba(24, 8, 89, .7) 100%
+    );
+}
+
+.support-master-header__actions {
+  position: absolute;
+  z-index: 3;
+  top: calc(var(--smh-h) * .26);
+  right: calc((100vw - var(--smh-content)) / 2);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.support-master-header__pill {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, .7);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .96);
+  color: #17152b;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  line-height: 18px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(21, 10, 77, .14);
+  backdrop-filter: blur(8px);
+  transition: border-color .2s ease, color .2s ease, background-color .2s ease;
+}
+
+.support-master-header__pill:hover,
+.support-master-header__pill[aria-current="page"] {
+  border-color: #a58cf5;
+  background: #fff;
+  color: #5425e6;
+}
+
+.support-master-header__pill svg {
+  width: 15px;
+  height: 15px;
+  color: #5b21e8;
+  stroke-width: 1.75;
+}
+
+.support-master-header__wave {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  display: block;
+  width: 100%;
+  height: 56px;
+  pointer-events: none;
+}
+
+/* Back wave ~20% softer: its colour is moved 20% toward the page background
+   (effective #C3B4F3 -> #CDC1F6) rather than made more transparent, which would
+   let the dark purple through. The front wave matches the
+   page background so the header melts into whichever page uses it. */
+.support-master-header__wave-back { fill: #cdc1f6; }
+.support-master-header__wave-front { fill: var(--support-page-bg, #eeeafd); }
+.support-master-header__wave-gold {
+  fill: none;
+  stroke: #d6a84d;
+  stroke-width: 1.5px;
+  stroke-opacity: .85;
+  vector-effect: non-scaling-stroke;
+}
+
+@media (max-width: 900px) {
+  .support-master-header { --smh-content: calc(100vw - 48px); --smh-photo-left: 0px; }
+  .support-master-header::before { display: none; }
+  .support-master-header__actions { top: 32px; right: 24px; }
+}
+
+@media (max-width: 640px) {
+  .support-master-header__actions { top: 20px; right: 16px; gap: 8px; }
+  .support-master-header__pill {
+    min-height: 34px;
+    padding: 0 14px;
+    font-size: 12px;
+  }
+  .support-master-header__pill svg { width: 15px; height: 15px; }
+  .support-master-header__wave { height: 40px; }
+}
+
+/* ---------- Banner variant (admin dashboard + Knowledge Base + support flow) ----------
+ * The approved artwork already contains the building, crest, sky, waves, gold
+ * line and lavender lower edge; it is drawn at its own 2172 x 224 ratio and
+ * anchored left, so nothing is distorted. Only the pills are drawn in code. */
+.support-master-header--banner {
+  height: var(--support-banner-header-h);
+  /* Behind the artwork's clipped bottom strip: fade from the artwork's lower
+     edge (#EFE9FD) into the page colour. */
+  background: linear-gradient(180deg, #efe9fd calc(100% * 205 / 224), var(--support-page-bg, #f2efff) 100%);
+}
+
+.support-master-header--banner::before { display: none; }
+
+.support-master-header__banner {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: left center;
+  pointer-events: none;
+  user-select: none;
+  /* Hide the artwork's bottom 19 of 224 rows: leftover card outlines from the
+     source screenshot. The wave ends above them. */
+  clip-path: inset(0 0 calc(100% * 19 / 224) 0);
+}
+
+/* Pill geometry measured from the approved reference (1:1 capture at 1901px):
+   36px tall, 53px from the top (27%), 15px apart, 88px (4.63vw) from the
+   right edge; 19px / 17px side padding, 17px icon, 8px icon gap, 13px text. */
+.support-master-header--banner .support-master-header__actions {
+  top: 27%;
+  right: 4.63vw;
+  gap: 15px;
+}
+
+.support-master-header--banner .support-master-header__pill {
+  min-height: 36px;
+  gap: 8px;
+  padding: 0 17px 0 19px;
+  border: 0;
+  background: #fbfaff;
+  color: #17152b;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.support-master-header--banner .support-master-header__pill:hover,
+.support-master-header--banner .support-master-header__pill[aria-current="page"] {
+  background: #f3eeff;
+  color: #17152b;
+}
+
+.support-master-header--banner .support-master-header__pill svg { width: 17px; height: 17px; }
+
+/* Below the large breakpoint the banner keeps a minimum height, so compact
+   pills keep clear of the crest. */
+@media (max-width: 1023px) {
+  .support-master-header--banner .support-master-header__actions { top: 26%; right: 24px; gap: 8px; }
+  .support-master-header--banner .support-master-header__pill { min-height: 32px; gap: 6px; padding: 0 12px; font-size: 12px; }
+  .support-master-header--banner .support-master-header__pill svg { width: 14px; height: 14px; }
+}
+
+@media (max-width: 639px) {
+  .support-master-header--mobile-action-row {
+    height: 150px;
+    /* Artwork is 112px tall here and its last 19/224 is clipped (~102.5px). */
+    background: linear-gradient(180deg, #efe9fd 102px, var(--support-page-bg, #f2efff) 128px);
+  }
+  .support-master-header--mobile-action-row .support-master-header__banner { top: 0; bottom: auto; height: 112px; }
+  .support-master-header--mobile-action-row .support-master-header__actions { top: auto; right: 16px; bottom: 8px; gap: 6px; }
+  .support-master-header--banner .support-master-header__pill { min-height: 28px; gap: 4px; padding: 0 10px; font-size: 11px; }
+  .support-master-header--banner .support-master-header__pill svg { width: 13px; height: 13px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .support-master-header__pill { transition: none; }
+}

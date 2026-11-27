@@ -1,0 +1,69 @@
+import { type BookingSummary, type RequesterRole, type Ticket } from "@/context/SupportContext";
+
+export const awaitingMeetingReason = "Awaiting support meeting";
+export const quickTicketReason = "Quick Ticket";
+export const chatbotClosingReason = "Closed via Chatbot";
+export const requesterClosingReason = "Closed by Requester";
+export const liveAgentQueueWaitingMessage = "No support admins are available right now. You're in queue and we'll connect you as soon as one becomes available. If you'd prefer another option, you can still continue this inquiry through booking session or submit ticket directly.";
+export const awaitingSupportReviewReason = quickTicketReason;
+export const coverageTutorRequestedReason = "Tutor Requested";
+export const coverageTutorAcceptedReason = "Tutor Accepted";
+export const coverageTutorRejectedReason = "Tutor Rejected";
+export const coverageRerequestingReason = "Rerequesting";
+export type SupportChatEntryAction = "live-chat" | "booking";
+export interface SupportChatLocationState {
+  entryAction?: SupportChatEntryAction;
+}
+export interface SupportBookingLocationState {
+  returnPath?: "/support/chat" | "/support/options";
+}
+const legacyQuickTicketReasons = ["Awaiting resolution", "Awaiting Resolution", "Awaiting support review"] as const;
+const coveragePendingReasons = [
+  coverageTutorRequestedReason,
+  coverageTutorAcceptedReason,
+  coverageTutorRejectedReason,
+  coverageRerequestingReason,
+] as const;
+
+type TicketFlowState = Pick<Ticket, "id" | "status" | "statusReason" | "requesterRole" | "liveChatRequested">;
+
+export const isCoachRequesterRole = (role: RequesterRole | string | null | undefined) =>
+  (role || "").trim().toLowerCase() === "coach";
+
+export const getRequesterChatClosingReason = (liveChatRequested: boolean) =>
+  liveChatRequested ? requesterClosingReason : chatbotClosingReason;
+
+export const isAwaitingMeetingTicket = (ticket: TicketFlowState) =>
+  ticket.status === "Pending" && ticket.statusReason === awaitingMeetingReason;
+
+export const isAwaitingSupportReviewTicket = (ticket: TicketFlowState) =>
+  ticket.status === "Pending"
+  && [quickTicketReason, ...legacyQuickTicketReasons, ...coveragePendingReasons].includes(ticket.statusReason);
+
+export const canReturnToChat = (ticket: TicketFlowState) =>
+  !isAwaitingSupportReviewTicket(ticket) && ticket.liveChatRequested;
+
+export const shouldShowStatusStep = (
+  ticket: Pick<Ticket, "id" | "status">,
+  bookingSummary: BookingSummary | null,
+) => Boolean(bookingSummary || (ticket.id && ticket.status !== "Open"));
+
+export const isSubmittedSupportFlowLocked = (
+  ticket: Pick<Ticket, "id" | "status">,
+  bookingSummary: BookingSummary | null = null,
+) => shouldShowStatusStep(ticket, bookingSummary);
+
+export const getSupportResumePath = (
+  ticket: Pick<Ticket, "id" | "status" | "requesterRole">,
+  bookingSummary: BookingSummary | null,
+) => {
+  if (shouldShowStatusStep(ticket, bookingSummary)) {
+    return "/support/status";
+  }
+
+  if (isCoachRequesterRole(ticket.requesterRole)) {
+    return ticket.id ? "/support/options" : "/";
+  }
+
+  return "/support/chat";
+};

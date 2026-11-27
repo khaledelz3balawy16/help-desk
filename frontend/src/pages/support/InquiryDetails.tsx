@@ -1,0 +1,1559 @@
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeft, ArrowRight, ChevronDown, FileText, Paperclip, Search, UserRound, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { SupportLayout } from "@/components/support/SupportLayout";
+import { StepIndicator } from "@/components/support/StepIndicator";
+import {
+  SELECTABLE_TECHNICAL_SUBCATEGORIES,
+  formatTechnicalSubcategoryLabel,
+  type EvidenceFile,
+  type SubmittedForLearner,
+  type TechnicalSubcategory,
+  type Ticket,
+} from "@/context/SupportContext";
+import { useSupport } from "@/context/useSupport";
+import {
+  buildCoverageInquiry,
+  fetchCoverageOptions,
+  fetchCoverageTimeOptions,
+  isCoverageSubcategory,
+  parseCoverageInquiry,
+  type CoverageTimeOption,
+} from "@/lib/coverageSupport";
+import { isSubmittedSupportFlowLocked } from "@/lib/supportFlow";
+import { persistTicketDraft, submitTicketDirectlyForReview } from "@/lib/supportTicketDraft";
+import { toast } from "sonner";
+import "./InquiryDetails.css";
+
+const textExtensions = new Set([
+  ".txt",
+  ".csv",
+  ".json",
+  ".md",
+  ".log",
+  ".xml",
+  ".html",
+  ".css",
+  ".js",
+  ".ts",
+]);
+
+const textMimeTypes = new Set([
+  "application/json",
+  "application/xml",
+  "application/javascript",
+  "application/x-javascript",
+]);
+
+const inquiryPlatforms: TechnicalSubcategory[] = SELECTABLE_TECHNICAL_SUBCATEGORIES;
+
+const getExtension = (name: string) => {
+  const dotIndex = name.lastIndexOf(".");
+  return dotIndex === -1 ? "" : name.slice(dotIndex).toLowerCase();
+};
+
+const isTextPreviewable = (file: { name: string; mimeType?: string; type?: string }) => {
+  const mimeType = file.mimeType || file.type || "";
+  return mimeType.startsWith("text/") || textMimeTypes.has(mimeType) || textExtensions.has(getExtension(file.name));
+};
+
+const getPreviewKind = (file: EvidenceFile) => {
+  const mimeType = file.mimeType || "";
+
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType === "application/pdf") return "pdf";
+  if (isTextPreviewable(file)) return "text";
+  return "generic";
+};
+
+const toEvidenceFile = async (file: File): Promise<EvidenceFile> => {
+  const evidenceFile: EvidenceFile = {
+    name: file.name,
+    size: file.size,
+    mimeType: file.type,
+    previewUrl: URL.createObjectURL(file),
+    file,
+  };
+
+  if (!isTextPreviewable(file)) {
+    return evidenceFile;
+  }
+
+  try {
+    return {
+      ...evidenceFile,
+      textContent: await file.text(),
+    };
+  } catch {
+    return evidenceFile;
+  }
+};
+
+const formatFileTypeLabel = (file: EvidenceFile) => {
+  const kind = getPreviewKind(file);
+
+  if (kind === "pdf") return "PDF preview";
+  if (kind === "generic") return file.mimeType || "File preview";
+
+  return `${kind.charAt(0).toUpperCase()}${kind.slice(1)} preview`;
+};
+
+const buildCoverageSessionNumberMap = (sessionDates: string[] = [], sessionNumbers: string[] = []) => {
+  return sessionDates.reduce<Record<string, string>>((accumulator, sessionDate, index) => {
+    const sessionNumber = sessionNumbers[index]?.trim() || "";
+    if (sessionNumber) {
+      accumulator[sessionDate] = sessionNumber;
+    }
+    return accumulator;
+  }, {});
+};
+
+const buildCoverageSessionSubjectMap = (sessionDates: string[] = [], sessionSubjects: string[] = [], fallbackSubject = "") => {
+  const normalizedFallbackSubject = fallbackSubject.trim();
+
+  return sessionDates.reduce<Record<string, string>>((accumulator, sessionDate, index) => {
+    const sessionSubject = sessionSubjects[index]?.trim() || (sessionSubjects.length === 0 ? normalizedFallbackSubject : "");
+    if (sessionSubject) {
+      accumulator[sessionDate] = sessionSubject;
+    }
+    return accumulator;
+  }, {});
+};
+
+const getDefaultCoverageSessionNumber = (sessionDate: string, sessionDateOptions: string[]) => {
+  const sessionIndex = sessionDateOptions.indexOf(sessionDate);
+  return sessionIndex >= 0 ? String(sessionIndex + 1) : "";
+};
+
+type RequestForMode = "self" | "learner";
+const SUBJECT_MAX_LENGTH = 120;
+const isValidEmailFormat = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+const InquiryDetails = () => {
+  const navigate = useNavigate();
+  const { ticket, updateTicket, clearBookingSummary, bookingSummary } = useSupport();
+  const initialCoverageDetails = parseCoverageInquiry(ticket.inquiry);
+  const [technicalSubcategory, setTechnicalSubcategory] = useState<TechnicalSubcategory>(ticket.technicalSubcategory);
+  const [subject, setSubject] = useState(ticket.subject);
+  const [inquiry, setInquiry] = useState(
+    isCoverageSubcategory(ticket.technicalSubcategory) && initialCoverageDetails ? "" : ticket.inquiry,
+  );
+  const [aiTeamPersonName, setAiTeamPersonName] = useState(ticket.aiTeamPersonName);
+  const [aiTeamPersonEmail, setAiTeamPersonEmail] = useState(ticket.aiTeamPersonEmail);
+  const [requestFor, setRequestFor] = useState<RequestForMode>(ticket.submittedForLearner ? "learner" : "self");
+  const [learnerSearch, setLearnerSearch] = useState("");
+  const [learnerResults, setLearnerResults] = useState<SubmittedForLearner[]>([]);
+  const [selectedSubmittedForLearner, setSelectedSubmittedForLearner] = useState<SubmittedForLearner | null>(ticket.submittedForLearner);
+  const [notifySubmittedForLearner, setNotifySubmittedForLearner] = useState(ticket.notifySubmittedForLearner);
+  const [isSearchingLearners, setIsSearchingLearners] = useState(false);
+  const [learnerSearchError, setLearnerSearchError] = useState("");
+  const [coverageTutor, setCoverageTutor] = useState(initialCoverageDetails?.tutor || "");
+  const [coverageModule, setCoverageModule] = useState(initialCoverageDetails?.module || "");
+  const [coverageTime, setCoverageTime] = useState(initialCoverageDetails?.time || "");
+  const [coverageSessionDates, setCoverageSessionDates] = useState(initialCoverageDetails?.sessionDates || []);
+  const [coverageSessionNumberByDate, setCoverageSessionNumberByDate] = useState<Record<string, string>>(
+    buildCoverageSessionNumberMap(initialCoverageDetails?.sessionDates || [], initialCoverageDetails?.sessionNumbers || []),
+  );
+  const [coverageSessionSubjectByDate, setCoverageSessionSubjectByDate] = useState<Record<string, string>>(
+    buildCoverageSessionSubjectMap(
+      initialCoverageDetails?.sessionDates || [],
+      initialCoverageDetails?.sessionSubjects || [],
+      initialCoverageDetails?.sessionSubject || "",
+    ),
+  );
+  const [coverageTutorOptions, setCoverageTutorOptions] = useState<string[]>([]);
+  const [coverageModuleOptions, setCoverageModuleOptions] = useState<string[]>([]);
+  const [coverageTimeOptions, setCoverageTimeOptions] = useState<CoverageTimeOption[]>([]);
+  const [coverageSessionDateOptions, setCoverageSessionDateOptions] = useState<string[]>([]);
+  const [coverageOptionsError, setCoverageOptionsError] = useState("");
+  const [isLoadingCoverageTutors, setIsLoadingCoverageTutors] = useState(false);
+  const [isLoadingCoverageModules, setIsLoadingCoverageModules] = useState(false);
+  const [isLoadingCoverageTimes, setIsLoadingCoverageTimes] = useState(false);
+  const [isLoadingCoverageSessionDates, setIsLoadingCoverageSessionDates] = useState(false);
+  const [evidence, setEvidence] = useState(ticket.evidence);
+  const [previewFile, setPreviewFile] = useState<EvidenceFile | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const coverageSessionDateRequestRef = useRef(0);
+  const isLearnerSource = ticket.requesterSource === "kbc_users_data" || ticket.requesterSource === "lms_learners";
+  const canUseCoverage = !isLearnerSource;
+  const canSubmitForLearner = !isLearnerSource || ticket.requesterRole === "coach" || ticket.requesterRole === "tutor" || ticket.requesterRole === "employer";
+  // Coverage stays staff-only (it is a tutor-coverage workflow). Tech team
+  // ("AI Team") IS offered to learners now, but as a plain route to the Ai Team
+  // queue -- the person-contact fields below are hidden for learner sources.
+  const availableInquiryPlatforms = inquiryPlatforms.filter((item) => (
+    !isLearnerSource
+    || item !== "Coverage"
+  ));
+  const selectedCoverageSessionNumbers = coverageSessionDates.map(
+    (sessionDate) => (coverageSessionNumberByDate[sessionDate] || getDefaultCoverageSessionNumber(sessionDate, coverageSessionDateOptions)).trim(),
+  );
+  const selectedCoverageSessionSubjects = coverageSessionDates.map(
+    (sessionDate) => (coverageSessionSubjectByDate[sessionDate] || "").trim(),
+  );
+  const availableCoverageTimeOptions = coverageTimeOptions.filter((item) => !item.completed);
+  const isReadOnlyReview = isSubmittedSupportFlowLocked(ticket, bookingSummary);
+
+  // The AI Team person-contact flow is for staff only. A learner picking Tech
+  // team just routes to the Ai Team queue with no person fields.
+  const isAiTeamFlow = technicalSubcategory === "AI Team" && !isLearnerSource;
+  const isCoverageFlow = canUseCoverage && isCoverageSubcategory(technicalSubcategory);
+  const hasSubmittedForLearner = requestFor !== "learner" || Boolean(selectedSubmittedForLearner);
+  const trimmedSubmittedForNotificationEmail = selectedSubmittedForLearner?.email?.trim() || "";
+  const hasValidSubmittedForNotificationEmail = !notifySubmittedForLearner
+    || (Boolean(selectedSubmittedForLearner) && isValidEmailFormat(trimmedSubmittedForNotificationEmail));
+  const trimmedAiTeamPersonName = aiTeamPersonName.trim();
+  const trimmedAiTeamPersonEmail = aiTeamPersonEmail.trim();
+  const hasValidAiTeamContact = !isAiTeamFlow
+    || (Boolean(trimmedAiTeamPersonName) && isValidEmailFormat(trimmedAiTeamPersonEmail));
+  const hasSubject = subject.trim().length > 0;
+  const canSubmit = !isReadOnlyReview && (isCoverageFlow
+    ? Boolean(
+      hasSubject
+      && hasSubmittedForLearner
+      && hasValidSubmittedForNotificationEmail
+      && technicalSubcategory
+      && coverageTutor
+      && coverageModule
+      && coverageTime
+      && coverageSessionDates.length > 0
+      && selectedCoverageSessionSubjects.every((value) => value.length > 0),
+    )
+    : Boolean(
+      hasSubject
+      && hasSubmittedForLearner
+      && hasValidSubmittedForNotificationEmail
+      && hasValidAiTeamContact
+      && technicalSubcategory
+      && inquiry.trim().length > 0,
+    ));
+
+  const loadCoverageSessionDateOptions = (tutorValue: string, moduleValue: string, timeValue: string) => {
+    if (!isCoverageFlow || !tutorValue || !moduleValue || !timeValue) {
+      coverageSessionDateRequestRef.current += 1;
+      setCoverageSessionDateOptions([]);
+      setCoverageSessionDates([]);
+      setCoverageSessionNumberByDate({});
+      setCoverageSessionSubjectByDate({});
+      setIsLoadingCoverageSessionDates(false);
+      return;
+    }
+
+    const requestId = coverageSessionDateRequestRef.current + 1;
+    coverageSessionDateRequestRef.current = requestId;
+    setIsLoadingCoverageSessionDates(true);
+    setCoverageOptionsError("");
+
+    void fetchCoverageOptions("session-dates", {
+      tutor: tutorValue,
+      module: moduleValue,
+      time: timeValue,
+    })
+      .then((options) => {
+        if (coverageSessionDateRequestRef.current !== requestId) {
+          return;
+        }
+
+        setCoverageSessionDateOptions(options);
+        setCoverageSessionDates((currentDates) => currentDates.filter((currentDate) => options.includes(currentDate)));
+      })
+      .catch((error: unknown) => {
+        if (coverageSessionDateRequestRef.current !== requestId) {
+          return;
+        }
+
+        setCoverageSessionDateOptions([]);
+        setCoverageSessionDates([]);
+        setCoverageSessionNumberByDate({});
+        setCoverageSessionSubjectByDate({});
+        setCoverageOptionsError(error instanceof Error ? error.message : "We could not load the session dates right now.");
+      })
+      .finally(() => {
+        if (coverageSessionDateRequestRef.current === requestId) {
+          setIsLoadingCoverageSessionDates(false);
+        }
+      });
+  };
+
+  useEffect(() => {
+    if (!ticket.id && !ticket.email) {
+      navigate("/support");
+    }
+  }, [navigate, ticket.email, ticket.id]);
+
+  useEffect(() => {
+    if (isReadOnlyReview) {
+      return;
+    }
+
+    if (!canUseCoverage && technicalSubcategory === "Coverage") {
+      setTechnicalSubcategory("");
+    }
+  }, [canUseCoverage, isReadOnlyReview, technicalSubcategory]);
+
+  useEffect(() => {
+    if (isReadOnlyReview) {
+      return;
+    }
+
+    if (!canSubmitForLearner) {
+      setRequestFor("self");
+      setSelectedSubmittedForLearner(null);
+      setNotifySubmittedForLearner(false);
+      setLearnerSearch("");
+      setLearnerResults([]);
+      setLearnerSearchError("");
+    }
+  }, [canSubmitForLearner, isReadOnlyReview]);
+
+  useEffect(() => {
+    if (!canSubmitForLearner || requestFor !== "learner") {
+      setLearnerResults([]);
+      setLearnerSearchError("");
+      setIsSearchingLearners(false);
+      return;
+    }
+
+    const normalizedQuery = learnerSearch.trim();
+    if (normalizedQuery.length < 2) {
+      setLearnerResults([]);
+      setLearnerSearchError("");
+      setIsSearchingLearners(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setIsSearchingLearners(true);
+      setLearnerSearchError("");
+
+      const searchParams = new URLSearchParams({
+        q: normalizedQuery,
+        limit: "12",
+        requesterEmail: ticket.email,
+      });
+
+      void fetch(`/api/learners/search?${searchParams.toString()}`)
+        .then(async (response) => {
+          const payload = (await response.json().catch(() => null)) as
+            | {
+                message?: string;
+                learners?: SubmittedForLearner[];
+              }
+            | null;
+
+          if (cancelled) {
+            return;
+          }
+
+          if (!response.ok) {
+            setLearnerResults([]);
+            setLearnerSearchError(payload?.message || "We could not search learners right now.");
+            return;
+          }
+
+          setLearnerResults(Array.isArray(payload?.learners) ? payload.learners : []);
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setLearnerResults([]);
+            setLearnerSearchError("We could not connect to the learner search service.");
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setIsSearchingLearners(false);
+          }
+        });
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [canSubmitForLearner, learnerSearch, requestFor, ticket.email]);
+
+  useEffect(() => {
+    if (!isCoverageFlow) {
+      setCoverageOptionsError("");
+      setCoverageTutorOptions([]);
+      setCoverageModuleOptions([]);
+      setCoverageTimeOptions([]);
+      setCoverageSessionDateOptions([]);
+      setCoverageSessionDates([]);
+      setCoverageSessionNumberByDate({});
+      setCoverageSessionSubjectByDate({});
+      setIsLoadingCoverageTutors(false);
+      setIsLoadingCoverageModules(false);
+      setIsLoadingCoverageTimes(false);
+      setIsLoadingCoverageSessionDates(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingCoverageTutors(true);
+    setCoverageOptionsError("");
+
+    void fetchCoverageOptions("tutors")
+      .then((options) => {
+        if (cancelled) {
+          return;
+        }
+
+        setCoverageTutorOptions(options);
+        setCoverageTutor((currentTutor) => (currentTutor && !options.includes(currentTutor) ? "" : currentTutor));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+
+        setCoverageTutorOptions([]);
+        setCoverageOptionsError(error instanceof Error ? error.message : "We could not load the tutors right now.");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingCoverageTutors(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCoverageFlow]);
+
+  useEffect(() => {
+    if (!isCoverageFlow || !coverageTutor) {
+      setCoverageModule("");
+      setCoverageTime("");
+      setCoverageModuleOptions([]);
+      setCoverageTimeOptions([]);
+      setCoverageSessionDateOptions([]);
+      setCoverageSessionDates([]);
+      setCoverageSessionNumberByDate({});
+      setCoverageSessionSubjectByDate({});
+      setIsLoadingCoverageModules(false);
+      setIsLoadingCoverageTimes(false);
+      setIsLoadingCoverageSessionDates(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingCoverageModules(true);
+    setCoverageOptionsError("");
+
+    void fetchCoverageOptions("modules", { tutor: coverageTutor })
+      .then((options) => {
+        if (cancelled) {
+          return;
+        }
+
+        setCoverageModuleOptions(options);
+        setCoverageModule((currentModule) => (currentModule && !options.includes(currentModule) ? "" : currentModule));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+
+        setCoverageModuleOptions([]);
+        setCoverageOptionsError(error instanceof Error ? error.message : "We could not load the modules right now.");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingCoverageModules(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [coverageTutor, isCoverageFlow]);
+
+  useEffect(() => {
+    if (!isCoverageFlow || !coverageTutor || !coverageModule) {
+      setCoverageTime("");
+      setCoverageTimeOptions([]);
+      setCoverageSessionDateOptions([]);
+      setCoverageSessionDates([]);
+      setCoverageSessionNumberByDate({});
+      setCoverageSessionSubjectByDate({});
+      setIsLoadingCoverageTimes(false);
+      setIsLoadingCoverageSessionDates(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingCoverageTimes(true);
+    setCoverageOptionsError("");
+
+    void fetchCoverageTimeOptions({ tutor: coverageTutor, module: coverageModule })
+      .then((options) => {
+        if (cancelled) {
+          return;
+        }
+
+        const nextAvailableTimeOptions = options.filter((option) => !option.completed);
+
+        setCoverageTimeOptions(options);
+        setCoverageTime((currentTime) => (
+          currentTime && !nextAvailableTimeOptions.some((option) => option.label === currentTime) ? "" : currentTime
+        ));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+
+        setCoverageTimeOptions([]);
+        setCoverageOptionsError(error instanceof Error ? error.message : "We could not load the times right now.");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingCoverageTimes(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [coverageModule, coverageTutor, isCoverageFlow]);
+
+  useEffect(() => {
+    if (!isCoverageFlow || !coverageTutor || !coverageModule || !coverageTime) {
+      coverageSessionDateRequestRef.current += 1;
+      setCoverageSessionDateOptions([]);
+      setCoverageSessionDates([]);
+      setCoverageSessionNumberByDate({});
+      setCoverageSessionSubjectByDate({});
+      setIsLoadingCoverageSessionDates(false);
+      return;
+    }
+
+    loadCoverageSessionDateOptions(coverageTutor, coverageModule, coverageTime);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Keep session-date loading tied to the selected coverage inputs only.
+  }, [coverageModule, coverageTime, coverageTutor, isCoverageFlow]);
+
+  useEffect(() => {
+    if (!isCoverageFlow) {
+      setCoverageSessionNumberByDate({});
+      setCoverageSessionSubjectByDate({});
+      return;
+    }
+
+    setCoverageSessionNumberByDate((currentSessionNumberByDate) => {
+      const nextSessionNumberByDate = coverageSessionDates.reduce<Record<string, string>>((accumulator, sessionDate) => {
+        accumulator[sessionDate] = currentSessionNumberByDate[sessionDate] || getDefaultCoverageSessionNumber(sessionDate, coverageSessionDateOptions);
+        return accumulator;
+      }, {});
+
+      const currentKeys = Object.keys(currentSessionNumberByDate);
+      const nextKeys = Object.keys(nextSessionNumberByDate);
+      const hasChanged = currentKeys.length !== nextKeys.length || nextKeys.some((key) => currentSessionNumberByDate[key] !== nextSessionNumberByDate[key]);
+      return hasChanged ? nextSessionNumberByDate : currentSessionNumberByDate;
+    });
+  }, [coverageSessionDateOptions, coverageSessionDates, isCoverageFlow]);
+
+  useEffect(() => {
+    if (!isCoverageFlow) {
+      setCoverageSessionSubjectByDate({});
+      return;
+    }
+
+    setCoverageSessionSubjectByDate((currentSessionSubjectByDate) => {
+      const nextSessionSubjectByDate = coverageSessionDates.reduce<Record<string, string>>((accumulator, sessionDate) => {
+        const sessionSubject = currentSessionSubjectByDate[sessionDate]?.trim() || "";
+        if (sessionSubject) {
+          accumulator[sessionDate] = sessionSubject;
+        }
+        return accumulator;
+      }, {});
+
+      const currentKeys = Object.keys(currentSessionSubjectByDate);
+      const nextKeys = Object.keys(nextSessionSubjectByDate);
+      const hasChanged = currentKeys.length !== nextKeys.length || nextKeys.some((key) => currentSessionSubjectByDate[key] !== nextSessionSubjectByDate[key]);
+      return hasChanged ? nextSessionSubjectByDate : currentSessionSubjectByDate;
+    });
+  }, [coverageSessionDates, isCoverageFlow]);
+
+  const onFiles = async (files: FileList | null) => {
+    if (isReadOnlyReview) return;
+    if (!files) return;
+
+    const selectedFiles = Array.from(files);
+    if (selectedFiles.length > 0) {
+      const nextFiles = await Promise.all(selectedFiles.map(toEvidenceFile));
+      setEvidence((prev) => [...prev, ...nextFiles]);
+    }
+
+    if (fileRef.current) {
+      fileRef.current.value = "";
+    }
+  };
+
+  const removeFile = (index: number) => {
+    if (isReadOnlyReview) return;
+
+    setEvidence((prev) => {
+      const fileToRemove = prev[index];
+
+      if (previewFile?.previewUrl === fileToRemove?.previewUrl) {
+        setPreviewFile(null);
+      }
+
+      if (fileToRemove?.previewUrl?.startsWith("blob:")) {
+        URL.revokeObjectURL(fileToRemove.previewUrl);
+      }
+
+      return prev.filter((_, currentIndex) => currentIndex !== index);
+    });
+  };
+
+  const handleNext = async () => {
+    if (isReadOnlyReview) return;
+    if (!canSubmit) return;
+
+    setIsSubmitting(true);
+
+    try {
+      const submittedInquiry = isCoverageFlow
+        ? buildCoverageInquiry({
+            tutor: coverageTutor,
+            module: coverageModule,
+            time: coverageTime,
+            sessionDates: coverageSessionDates,
+            sessionNumbers: selectedCoverageSessionNumbers,
+            sessionSubjects: selectedCoverageSessionSubjects,
+            sessionSubject: selectedCoverageSessionSubjects.join("; "),
+          })
+        : inquiry.trim();
+      const submittedForLearner = canSubmitForLearner && requestFor === "learner"
+        ? selectedSubmittedForLearner
+          ? {
+              ...selectedSubmittedForLearner,
+               notificationEmail: selectedSubmittedForLearner.email,
+            }
+          : null
+        : null;
+      const coverageSessions = isCoverageFlow
+        ? coverageSessionDates.map((sessionDate, index) => ({
+            id: `session-${index + 1}`,
+            label: `Session ${index + 1}`,
+            date: sessionDate,
+            number: selectedCoverageSessionNumbers[index] || "",
+            subject: selectedCoverageSessionSubjects[index] || "",
+          }))
+        : [];
+
+      const nextTicket: Ticket = {
+        ...ticket,
+        id: ticket.id || "",
+        learnerName: ticket.learnerName,
+        email: ticket.email,
+        requesterRole: ticket.requesterRole,
+        requesterSource: ticket.requesterSource,
+        category: "Technical",
+        technicalSubcategory,
+        subject: subject.trim(),
+        inquiry: submittedInquiry,
+        aiTeamPersonName: isAiTeamFlow ? trimmedAiTeamPersonName : "",
+        aiTeamPersonEmail: isAiTeamFlow ? trimmedAiTeamPersonEmail.toLowerCase() : "",
+        coverageSessions,
+        submittedForLearner,
+        notifySubmittedForLearner: Boolean(submittedForLearner && notifySubmittedForLearner && isValidEmailFormat(submittedForLearner.notificationEmail || "")),
+        evidence,
+        status: ticket.id ? ticket.status : "Open",
+        statusReason: ticket.id ? ticket.statusReason : "",
+        assignedAgentId: ticket.id ? ticket.assignedAgentId : null,
+        assignedTeam: ticket.id ? ticket.assignedTeam : "Unassigned",
+        slaStatus: ticket.id ? ticket.slaStatus : "Pending Review",
+        createdAt: ticket.id ? ticket.createdAt : "",
+        chatState: ticket.id ? ticket.chatState : "open",
+        liveChatRequested: ticket.id ? ticket.liveChatRequested : false,
+        chatHistory: ticket.id ? ticket.chatHistory : [],
+      };
+
+      if (isCoverageFlow) {
+        const persistedTicket = await persistTicketDraft(nextTicket);
+        const submittedTicket = await submitTicketDirectlyForReview(persistedTicket);
+
+        clearBookingSummary();
+        updateTicket(submittedTicket);
+        toast.success("Your coverage ticket has been submitted to the Learning Plan team.");
+        navigate("/support/status");
+        return;
+      }
+
+      clearBookingSummary();
+      updateTicket(nextTicket);
+      navigate("/support/options");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "We could not save these inquiry details. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const previewKind = previewFile ? getPreviewKind(previewFile) : null;
+  const pageDescription = isCoverageFlow
+    ? "Add a subject, then select the tutor, module, time, session date, and session details."
+    : "Choose the inquiry category, add a subject, and describe the issue.";
+
+  const handleCoverageTutorChange = (value: string) => {
+    if (isReadOnlyReview) return;
+
+    setCoverageTutor(value);
+    setCoverageModule("");
+    setCoverageTime("");
+    setCoverageSessionDates([]);
+    setCoverageSessionDateOptions([]);
+    setCoverageSessionNumberByDate({});
+    setCoverageSessionSubjectByDate({});
+  };
+
+  const handleCoverageModuleChange = (value: string) => {
+    if (isReadOnlyReview) return;
+
+    setCoverageModule(value);
+    setCoverageTime("");
+    setCoverageSessionDates([]);
+    setCoverageSessionDateOptions([]);
+    setCoverageSessionNumberByDate({});
+    setCoverageSessionSubjectByDate({});
+  };
+
+  const handleCoverageTimeChange = (value: string) => {
+    if (isReadOnlyReview) return;
+
+    setCoverageTime(value);
+    setCoverageSessionDates([]);
+    setCoverageSessionNumberByDate({});
+    setCoverageSessionSubjectByDate({});
+  };
+
+  const toggleCoverageSessionDate = (value: string) => {
+    if (isReadOnlyReview) return;
+
+    setCoverageSessionDates((currentDates) => {
+      if (currentDates.includes(value)) {
+        return currentDates.filter((currentDate) => currentDate !== value);
+      }
+
+      return coverageSessionDateOptions.filter((option) => option === value || currentDates.includes(option));
+    });
+  };
+
+  const handleCoverageSessionNumberChange = (sessionDate: string, value: string) => {
+    if (isReadOnlyReview) return;
+
+    setCoverageSessionNumberByDate((currentSessionNumberByDate) => ({
+      ...currentSessionNumberByDate,
+      [sessionDate]: value.replace(/[^\d]/g, ""),
+    }));
+  };
+
+  const handleCoverageSessionSubjectChange = (sessionDate: string, value: string) => {
+    if (isReadOnlyReview) return;
+
+    setCoverageSessionSubjectByDate((currentSessionSubjectByDate) => ({
+      ...currentSessionSubjectByDate,
+      [sessionDate]: value,
+    }));
+  };
+
+  const coverageSessionDateTriggerLabel = !coverageTime
+    ? "Choose time first"
+    : isLoadingCoverageSessionDates
+      ? "Loading session dates..."
+      : coverageSessionDates.length === 0
+        ? "Choose session date(s)"
+        : coverageSessionDates.length === 1
+          ? coverageSessionDates[0]
+          : `${coverageSessionDates.length} session dates selected`;
+
+  return (
+    <SupportLayout fullWidth mainClassName="support-inquiry-main">
+
+      <div className="support-inquiry-body">
+        <div className="support-inquiry-steps">
+          <StepIndicator current={2} finalLabel="Open" />
+        </div>
+        <div className="support-inquiry-shell">
+          <div className="support-inquiry-heading">
+            <div className="mb-1 flex flex-wrap items-center gap-3">
+              <h1>
+              {isReadOnlyReview ? "Review Support Inquiry" : "Create Support Inquiry"}
+              </h1>
+              {isReadOnlyReview ? (
+                <span className="rounded-full border border-primary/15 bg-primary/[0.06] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
+                  Submitted - read only
+                </span>
+              ) : null}
+            </div>
+            <p>
+              {isReadOnlyReview
+                ? "This ticket has already been submitted. You can review the saved details, but they cannot be edited here."
+                : pageDescription}
+            </p>
+          </div>
+
+          <div className="support-inquiry-card space-y-5">
+            {canSubmitForLearner && (
+              <div className="support-inquiry-requester space-y-3 rounded-2xl border p-4">
+                <div>
+                  <Label>Who is this request for?</Label>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    Keep yourself as the requester, or attach the ticket to a learner who asked you for help.
+                  </p>
+                </div>
+
+                <RadioGroup
+                  value={requestFor}
+                  onValueChange={(value) => {
+                    if (isReadOnlyReview) return;
+
+                    const nextRequestFor = value as RequestForMode;
+                    setRequestFor(nextRequestFor);
+                    if (nextRequestFor === "self") {
+                      setSelectedSubmittedForLearner(null);
+                      setNotifySubmittedForLearner(false);
+                      setLearnerSearch("");
+                      setLearnerResults([]);
+                    }
+                  }}
+                  disabled={isReadOnlyReview}
+                  className="grid gap-3 sm:grid-cols-2"
+                >
+                  <Label
+                    htmlFor="request-for-self"
+                    className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${
+                      isReadOnlyReview ? "cursor-default opacity-80" : "cursor-pointer"
+                    } ${
+                      requestFor === "self"
+                        ? "border-primary bg-primary/[0.06] text-primary shadow-soft"
+                        : "border-primary/10 bg-white hover:border-primary/25"
+                    }`}
+                  >
+                    <RadioGroupItem id="request-for-self" value="self" className="mt-1" />
+                    <span>
+                      <span className="block font-semibold">For myself</span>
+                      <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                        The ticket is about the signed-in requester.
+                      </span>
+                    </span>
+                  </Label>
+
+                  <Label
+                    htmlFor="request-for-learner"
+                    className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${
+                      isReadOnlyReview ? "cursor-default opacity-80" : "cursor-pointer"
+                    } ${
+                      requestFor === "learner"
+                        ? "border-primary bg-primary/[0.06] text-primary shadow-soft"
+                        : "border-primary/10 bg-white hover:border-primary/25"
+                    }`}
+                  >
+                    <RadioGroupItem id="request-for-learner" value="learner" className="mt-1" />
+                    <span>
+                      <span className="block font-semibold">For a learner</span>
+                      <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                        Search KBC learners and keep the requester linked as the submitter.
+                      </span>
+                    </span>
+                  </Label>
+                </RadioGroup>
+
+                {requestFor === "learner" && (
+                  <div className="space-y-3 rounded-2xl border border-primary/10 bg-background/80 p-4">
+                    {selectedSubmittedForLearner ? (
+                      <div className="rounded-2xl border border-primary/15 bg-white p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="flex min-w-0 items-start gap-3">
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/[0.08] text-primary">
+                              <UserRound className="h-5 w-5" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="font-semibold text-foreground">
+                                {selectedSubmittedForLearner.fullName}
+                              </div>
+                              <div className="mt-1 break-all text-sm text-muted-foreground">
+                                Official email: {selectedSubmittedForLearner.email}
+                              </div>
+                              {selectedSubmittedForLearner.externalLearnerId && (
+                                <div className="mt-1 text-xs text-muted-foreground">
+                                  Learner ID: {selectedSubmittedForLearner.externalLearnerId}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="rounded-full"
+                            onClick={() => {
+                              if (isReadOnlyReview) return;
+
+                              setSelectedSubmittedForLearner(null);
+                              setNotifySubmittedForLearner(false);
+                              setLearnerSearch("");
+                            }}
+                            disabled={isReadOnlyReview}
+                          >
+                            Change
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <Label htmlFor="learner-search">Search learner</Label>
+                        <div className="relative">
+                          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            id="learner-search"
+                            value={learnerSearch}
+                            onChange={(event) => {
+                              if (!isReadOnlyReview) {
+                                setLearnerSearch(event.target.value);
+                              }
+                            }}
+                            placeholder="Type learner name, email, or learner ID..."
+                            readOnly={isReadOnlyReview}
+                            className="h-11 rounded-xl pl-10"
+                          />
+                        </div>
+
+                        {learnerSearch.trim().length > 0 && learnerSearch.trim().length < 2 && (
+                          <p className="text-xs text-muted-foreground">Type at least 2 characters to search.</p>
+                        )}
+                        {isSearchingLearners && (
+                          <p className="text-xs text-muted-foreground">Searching learners...</p>
+                        )}
+                        {learnerSearchError && (
+                          <p className="text-xs text-destructive">{learnerSearchError}</p>
+                        )}
+                        {!isSearchingLearners && learnerSearch.trim().length >= 2 && !learnerSearchError && learnerResults.length === 0 && (
+                          <p className="text-xs text-muted-foreground">No matching learners found.</p>
+                        )}
+
+                        {learnerResults.length > 0 && (
+                          <div className="overflow-hidden rounded-2xl border border-primary/10 bg-white shadow-soft">
+                            {learnerResults.map((learner) => (
+                              <button
+                                key={learner.id}
+                                type="button"
+                                onClick={() => {
+                                  if (isReadOnlyReview) return;
+
+                                  setSelectedSubmittedForLearner(learner);
+                                  setLearnerResults([]);
+                                  setLearnerSearch("");
+                                }}
+                                disabled={isReadOnlyReview}
+                                className="flex w-full flex-col gap-1 border-b border-primary/8 px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-primary/[0.05]"
+                              >
+                                <span className="font-semibold text-foreground">{learner.fullName}</span>
+                                <span className="break-all text-xs text-muted-foreground">
+                                  {learner.email}
+                                  {learner.externalLearnerId ? ` • ID: ${learner.externalLearnerId}` : ""}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {selectedSubmittedForLearner ? (
+                      <div className="space-y-2 rounded-2xl border border-primary/10 bg-white px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <Label htmlFor="submitted-for-notification-email">Official learner email</Label>
+                          <span className="rounded-full border border-primary/10 bg-primary/[0.05] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-primary">
+                            Learner record
+                          </span>
+                        </div>
+                        <Input
+                          id="submitted-for-notification-email"
+                          type="email"
+                          value={selectedSubmittedForLearner.email || ""}
+                          placeholder={selectedSubmittedForLearner.email}
+                          readOnly
+                          className="h-11 rounded-xl"
+                        />
+                        <p className="text-xs leading-5 text-muted-foreground">
+                          Notifications are sent to this email from the learner record.
+                        </p>
+                        {notifySubmittedForLearner && !hasValidSubmittedForNotificationEmail ? (
+                          <p className="text-xs font-medium text-destructive">
+                            Please enter a valid notification email before continuing.
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-primary/10 bg-white px-4 py-3 text-sm"
+                    >
+                      <Checkbox
+                        checked={notifySubmittedForLearner}
+                        disabled={isReadOnlyReview || !selectedSubmittedForLearner || !isValidEmailFormat(selectedSubmittedForLearner.email || "")}
+                        onCheckedChange={(checked) => setNotifySubmittedForLearner(Boolean(checked))}
+                        className="mt-1"
+                      />
+                      <span>
+                        <span className="flex flex-wrap items-center gap-2 font-semibold text-foreground">
+                          Notify learner by email
+                        </span>
+                        <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                          Off by default. If selected, the learner receives an email when the ticket is submitted and when it is closed.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="support-inquiry-primary-fields">
+              <div className="space-y-2">
+                <Label>Inquiry Category</Label>
+                <Select
+                  value={technicalSubcategory}
+                  onValueChange={(value) => {
+                    if (!isReadOnlyReview) {
+                      setTechnicalSubcategory(value as TechnicalSubcategory);
+                    }
+                  }}
+                  disabled={isReadOnlyReview}
+                >
+                  <SelectTrigger className="h-11">
+                    <SelectValue placeholder="Select a category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableInquiryPlatforms.map((item) => (
+                      <SelectItem key={item} value={item}>{formatTechnicalSubcategoryLabel(item)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-end justify-between gap-3">
+                  <Label htmlFor="ticket-subject">Subject</Label>
+                  <span className="text-xs text-muted-foreground">
+                    {subject.length}/{SUBJECT_MAX_LENGTH}
+                  </span>
+                </div>
+                <Input
+                  id="ticket-subject"
+                  required
+                  maxLength={SUBJECT_MAX_LENGTH}
+                  value={subject}
+                  onChange={(event) => {
+                    if (!isReadOnlyReview) {
+                      setSubject(event.target.value);
+                    }
+                  }}
+                  placeholder="Write a short title for this issue..."
+                  readOnly={isReadOnlyReview}
+                  className="h-11 rounded-xl"
+                />
+                <p className="support-inquiry-subject-help text-xs leading-5 text-muted-foreground">
+                  Keep this as a short title. Add the full explanation in Issue Details below.
+                </p>
+              </div>
+            </div>
+
+            {isAiTeamFlow ? (
+              <div className="grid gap-4 rounded-2xl border border-primary/10 bg-primary/[0.03] p-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="ai-team-person-name">Person name</Label>
+                  <Input
+                    id="ai-team-person-name"
+                    value={aiTeamPersonName}
+                    onChange={(event) => {
+                      if (!isReadOnlyReview) {
+                        setAiTeamPersonName(event.target.value);
+                      }
+                    }}
+                    placeholder="Enter the person's name"
+                    readOnly={isReadOnlyReview}
+                    className="h-11 rounded-xl"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ai-team-person-email">Person email</Label>
+                  <Input
+                    id="ai-team-person-email"
+                    type="email"
+                    value={aiTeamPersonEmail}
+                    onChange={(event) => {
+                      if (!isReadOnlyReview) {
+                        setAiTeamPersonEmail(event.target.value);
+                      }
+                    }}
+                    placeholder="Enter the person's email"
+                    readOnly={isReadOnlyReview}
+                    className="h-11 rounded-xl"
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {isCoverageFlow ? (
+              <div className="space-y-5 rounded-2xl border border-primary/10 bg-primary/[0.03] p-4">
+                <div className="grid gap-5 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>Tutor</Label>
+                    <Select value={coverageTutor} onValueChange={handleCoverageTutorChange} disabled={isReadOnlyReview || isLoadingCoverageTutors}>
+                      <SelectTrigger className="h-11">
+                        <SelectValue placeholder={isLoadingCoverageTutors ? "Loading tutors..." : "Choose tutor"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {coverageTutorOptions.length > 0 ? (
+                          coverageTutorOptions.map((item) => (
+                            <SelectItem key={item} value={item}>{item}</SelectItem>
+                          ))
+                        ) : (
+                          <div className="px-3 py-2 text-sm text-muted-foreground">
+                            {isLoadingCoverageTutors ? "Loading tutors..." : "No tutors available."}
+                          </div>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Module</Label>
+                    <Select
+                      value={coverageModule}
+                      onValueChange={handleCoverageModuleChange}
+                      disabled={isReadOnlyReview || !coverageTutor || isLoadingCoverageModules}
+                    >
+                      <SelectTrigger className="h-11">
+                        <SelectValue
+                          placeholder={
+                            !coverageTutor
+                              ? "Choose tutor first"
+                              : isLoadingCoverageModules
+                                ? "Loading modules..."
+                                : "Choose module"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {coverageModuleOptions.length > 0 ? (
+                          coverageModuleOptions.map((item) => (
+                            <SelectItem key={item} value={item}>{item}</SelectItem>
+                          ))
+                        ) : (
+                          <div className="px-3 py-2 text-sm text-muted-foreground">
+                            {!coverageTutor
+                              ? "Choose tutor first."
+                              : isLoadingCoverageModules
+                                ? "Loading modules..."
+                                : "No upcoming modules available."}
+                          </div>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="grid gap-5 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                  <div className="space-y-2">
+                    <Label>Time</Label>
+                    <Select
+                      value={coverageTime}
+                      onValueChange={handleCoverageTimeChange}
+                      disabled={isReadOnlyReview || !coverageModule || isLoadingCoverageTimes}
+                    >
+                      <SelectTrigger className="h-11">
+                        <SelectValue
+                          placeholder={
+                            !coverageModule
+                              ? "Choose module first"
+                              : isLoadingCoverageTimes
+                                ? "Loading times..."
+                                : "Choose time"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableCoverageTimeOptions.length > 0 ? (
+                          availableCoverageTimeOptions.map((item) => (
+                            <SelectItem key={item.label} value={item.label}>
+                              {item.label}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <div className="px-3 py-2 text-sm text-muted-foreground">
+                            {!coverageModule
+                              ? "Choose module first."
+                              : isLoadingCoverageTimes
+                                ? "Loading times..."
+                                : coverageTimeOptions.length > 0
+                                  ? "No upcoming times available."
+                                  : "No times available."}
+                          </div>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Session Date</Label>
+                    <DropdownMenu
+                      onOpenChange={(open) => {
+                        if (
+                          open
+                          && coverageTutor
+                          && coverageModule
+                          && coverageTime
+                          && coverageSessionDateOptions.length === 0
+                          && !isLoadingCoverageSessionDates
+                        ) {
+                          loadCoverageSessionDateOptions(coverageTutor, coverageModule, coverageTime);
+                        }
+                      }}
+                    >
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={isReadOnlyReview || !coverageTime || isLoadingCoverageSessionDates}
+                          className="h-11 w-full justify-between rounded-xl border-primary/12 bg-white px-3 font-normal text-foreground shadow-sm hover:bg-white"
+                        >
+                          <span className="truncate text-left">
+                            {coverageSessionDateTriggerLabel}
+                          </span>
+                          <ChevronDown className="ml-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="start"
+                        className="w-[min(92vw,32rem)] overflow-hidden rounded-2xl border border-primary/12 bg-white/95 p-0 text-foreground shadow-[0_24px_60px_rgba(35,27,103,0.16)] backdrop-blur"
+                      >
+                        <div className="border-b border-primary/8 px-4 py-3">
+                          <div className="text-sm font-semibold text-foreground">
+                            Select one or more upcoming sessions
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {coverageSessionDates.length > 0
+                              ? `${coverageSessionDates.length} ${coverageSessionDates.length === 1 ? "date" : "dates"} selected`
+                              : "Choose all matching session dates for this request."}
+                          </p>
+                        </div>
+                        <div className="max-h-[min(22rem,60vh)] overflow-y-auto p-2">
+                          {coverageSessionDateOptions.length > 0 ? (
+                            coverageSessionDateOptions.map((item) => (
+                              <DropdownMenuCheckboxItem
+                                key={item}
+                                checked={coverageSessionDates.includes(item)}
+                                onSelect={(event) => event.preventDefault()}
+                                onCheckedChange={() => toggleCoverageSessionDate(item)}
+                                className="min-h-11 rounded-xl py-2.5 pl-10 pr-3 text-sm font-medium text-foreground outline-none transition-all focus:bg-primary/[0.06] focus:text-foreground data-[state=checked]:bg-primary/[0.08] data-[state=checked]:text-primary"
+                              >
+                                <span className="whitespace-normal break-words leading-5">{item}</span>
+                              </DropdownMenuCheckboxItem>
+                            ))
+                          ) : (
+                            <div className="rounded-xl border border-dashed border-primary/10 px-3 py-3 text-sm text-muted-foreground">
+                              {!coverageTime
+                                ? "Choose time first."
+                                : isLoadingCoverageSessionDates
+                                  ? "Loading session dates..."
+                                  : "No upcoming session dates available."}
+                            </div>
+                          )}
+                        </div>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </div>
+
+                <div className="space-y-4 rounded-2xl border border-primary/10 bg-white/70 p-4 shadow-sm">
+                  <div>
+                    <Label>Session Details</Label>
+                    <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+                      Session numbers are auto-calculated from the training plan. You can still adjust them, and each selected session can have its own subject.
+                    </p>
+                  </div>
+
+                  {coverageSessionDates.length > 0 ? (
+                    <div className="space-y-3">
+                      {coverageSessionDates.map((sessionDate, index) => (
+                        <div
+                          key={sessionDate}
+                          className="rounded-2xl border border-primary/10 bg-background/90 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]"
+                        >
+                          <div className="mb-3 text-sm font-semibold text-foreground">
+                            Session {index + 1}
+                          </div>
+                          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_148px] lg:items-end">
+                            <div className="space-y-2">
+                              <Label htmlFor={`session-subject-${sessionDate}`}>Session Subject</Label>
+                              <Input
+                                id={`session-subject-${sessionDate}`}
+                                placeholder="Write the session subject"
+                                value={coverageSessionSubjectByDate[sessionDate] || ""}
+                                onChange={(event) => handleCoverageSessionSubjectChange(sessionDate, event.target.value)}
+                                readOnly={isReadOnlyReview}
+                                className="h-11 rounded-xl border-primary/12 bg-white shadow-none"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label
+                                htmlFor={`session-number-${sessionDate}`}
+                                className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+                              >
+                                Session No.
+                              </Label>
+                              <Input
+                                id={`session-number-${sessionDate}`}
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                placeholder="No."
+                                value={coverageSessionNumberByDate[sessionDate] || ""}
+                                onChange={(event) => handleCoverageSessionNumberChange(sessionDate, event.target.value)}
+                                readOnly={isReadOnlyReview}
+                                className="h-11 rounded-xl border-primary/12 bg-white text-center font-semibold shadow-none"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-primary/12 bg-background/80 px-4 py-3 text-sm text-muted-foreground">
+                      Choose session date(s) first to unlock the session details.
+                    </div>
+                  )}
+                </div>
+
+                {coverageOptionsError && (
+                  <p className="text-sm text-destructive">
+                    {coverageOptionsError}
+                  </p>
+                )}
+
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label>Issue Details</Label>
+                <Textarea
+                  rows={6}
+                  placeholder="Please describe your issue in detail..."
+                  value={inquiry}
+                  onChange={(event) => {
+                    if (!isReadOnlyReview) {
+                      setInquiry(event.target.value);
+                    }
+                  }}
+                  readOnly={isReadOnlyReview}
+                  className="resize-none"
+                />
+              </div>
+            )}
+
+            <div className="support-inquiry-evidence space-y-2">
+              <Label className="flex items-center gap-2">
+                <Paperclip className="w-4 h-4" /> Supporting evidence
+              </Label>
+              <div
+                onClick={() => {
+                  if (!isReadOnlyReview) {
+                    fileRef.current?.click();
+                  }
+                }}
+                className={`p-6 text-center transition-colors border-2 border-dashed rounded-xl ${
+                  isReadOnlyReview
+                    ? "cursor-default border-border bg-secondary/20"
+                    : "cursor-pointer border-border hover:border-primary hover:bg-primary/5"
+                }`}
+              >
+                <Paperclip className="w-6 h-6 mx-auto mb-2 text-muted-foreground" />
+                <p className="text-sm font-medium">
+                  {isReadOnlyReview ? "Submitted files are shown below" : "Click to upload files"}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {isReadOnlyReview
+                    ? "Evidence is read-only after the ticket has been submitted."
+                    : "You can upload any file type. Multiple files are supported."}
+                </p>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  disabled={isReadOnlyReview}
+                  onChange={(event) => void onFiles(event.target.files)}
+                />
+              </div>
+              {evidence.length > 0 && (
+                <ul className="mt-3 space-y-2">
+                  {evidence.map((file, index) => (
+                    <li
+                      key={`${file.name}-${index}`}
+                      className="flex items-center justify-between px-3 py-2 text-sm rounded-lg bg-secondary"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setPreviewFile(file)}
+                        disabled={!file.previewUrl && !file.textContent}
+                        className="flex flex-1 min-w-0 items-center gap-2 text-left transition-colors hover:text-primary"
+                      >
+                        <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{file.name}</span>
+                        {file.previewUrl || file.textContent ? (
+                          <span className="shrink-0 text-xs text-primary">View</span>
+                        ) : null}
+                      </button>
+                      {!isReadOnlyReview ? (
+                        <button
+                          type="button"
+                          onClick={() => removeFile(index)}
+                          className="ml-3 shrink-0 text-muted-foreground hover:text-destructive"
+                          aria-label="Remove"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {isReadOnlyReview && evidence.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No supporting evidence was uploaded for this ticket.</p>
+              ) : null}
+            </div>
+
+            <div className="support-inquiry-actions flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between">
+              {isReadOnlyReview ? (
+                <Button
+                  onClick={() => navigate("/support/status")}
+                  className="mx-auto w-full border-0 gradient-primary sm:w-auto"
+                >
+                  Return to Ticket Status
+                </Button>
+              ) : (
+                <Button variant="ghost" className="w-full sm:w-auto" onClick={() => navigate("/")}>
+                  <ArrowLeft className="w-4 h-4 mr-2" /> Back
+                </Button>
+              )}
+              {!isReadOnlyReview ? (
+                <Button
+                  disabled={!canSubmit || isSubmitting}
+                  onClick={() => void handleNext()}
+                  className="w-full border-0 gradient-primary sm:w-auto"
+                >
+                  {isSubmitting ? "Saving..." : isAiTeamFlow ? "Submit ticket" : "Next"}
+                  {!isSubmitting && <ArrowRight className="w-4 h-4 ml-2" />}
+                </Button>
+              ) : null}
+            </div>
+          </div>
+          </div>
+        </div>
+
+      <Dialog open={!!previewFile} onOpenChange={(open) => !open && setPreviewFile(null)}>
+        <DialogContent className="max-w-4xl p-3 sm:p-4">
+          <DialogHeader className="px-1 pt-1">
+            <DialogTitle className="text-base">{previewFile?.name}</DialogTitle>
+            <DialogDescription>
+              {previewFile ? formatFileTypeLabel(previewFile) : "File preview"}
+            </DialogDescription>
+          </DialogHeader>
+
+          {previewFile?.previewUrl && previewKind === "image" && (
+            <img
+              src={previewFile.previewUrl}
+              alt={previewFile.name}
+              className="w-full max-h-[75vh] rounded-lg object-contain bg-secondary/30"
+            />
+          )}
+
+          {previewFile?.previewUrl && previewKind === "video" && (
+            <video
+              src={previewFile.previewUrl}
+              controls
+              className="w-full max-h-[75vh] rounded-lg bg-black"
+            />
+          )}
+
+          {previewFile?.previewUrl && previewKind === "audio" && (
+            <div className="p-4 border rounded-lg bg-secondary/20">
+              <audio src={previewFile.previewUrl} controls className="w-full" />
+            </div>
+          )}
+
+          {previewFile?.previewUrl && previewKind === "pdf" && (
+            <iframe
+              src={previewFile.previewUrl}
+              title={previewFile.name}
+              className="h-[75vh] w-full rounded-lg border bg-white"
+            />
+          )}
+
+          {previewKind === "text" && (
+            <pre className="max-h-[75vh] overflow-auto rounded-lg border bg-secondary/20 p-4 text-sm whitespace-pre-wrap break-words">
+              {previewFile?.textContent || "Unable to load text preview."}
+            </pre>
+          )}
+
+          {previewFile?.previewUrl && previewKind === "generic" && (
+            <div className="space-y-3">
+              <object
+                data={previewFile.previewUrl}
+                type={previewFile.mimeType}
+                className="h-[65vh] w-full rounded-lg border bg-white"
+              >
+                <div className="flex h-full min-h-48 items-center justify-center rounded-lg border bg-secondary/20 p-4 text-center text-sm text-muted-foreground">
+                  This file type cannot be previewed directly here. Use Open File to view or download it.
+                </div>
+              </object>
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => window.open(previewFile.previewUrl, "_blank", "noopener,noreferrer")}
+                >
+                  Open File
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </SupportLayout>
+  );
+};
+
+export default InquiryDetails;

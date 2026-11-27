@@ -1,0 +1,69 @@
+ROLE_USER = "user"
+ROLE_COACH = "coach"
+ROLE_TUTOR = "tutor"
+ROLE_EMPLOYER = "employer"
+ROLE_ADMIN = "admin"
+ROLE_SUPERADMIN = "superadmin"
+ROLE_AGENT = "agent"
+ACCOUNT_SCOPE_STAFF = "staff"
+ACCOUNT_SCOPE_REQUESTER = "requester"
+SUPPORT_ACCESS_GROUP_NAME = "support access"
+ADMIN_ACCESS_GROUP_NAME = "admin access"
+OPERATIONS_ACCESS_GROUP_NAME = "operations access"
+COACH_ACCESS_GROUP_NAME = "coach access"
+TUTOR_ACCESS_GROUP_NAME = "tutor access"
+
+ACCOUNT_ROLES = (
+    ROLE_USER,
+    ROLE_COACH,
+    ROLE_TUTOR,
+    ROLE_EMPLOYER,
+    ROLE_ADMIN,
+    ROLE_SUPERADMIN,
+    ROLE_AGENT,
+)
+
+PUBLIC_SUPPORT_ACCOUNT_ROLES = (
+    ROLE_USER,
+    ROLE_COACH,
+    ROLE_TUTOR,
+    ROLE_EMPLOYER,
+)
+
+STAFF_ACCOUNT_ROLES = (
+    ROLE_ADMIN,
+    ROLE_SUPERADMIN,
+    ROLE_AGENT,
+)
+
+PUBLIC_SUPPORT_ACCOUNT_ROLE_SET = set(PUBLIC_SUPPORT_ACCOUNT_ROLES)
+ADMIN_ACCESS_ROLES = {ROLE_ADMIN, ROLE_SUPERADMIN}
+SUPPORT_PORTAL_ACCESS_ROLES = {ROLE_AGENT, ROLE_ADMIN, ROLE_SUPERADMIN}
+ACCOUNT_SCOPES = (
+    ACCOUNT_SCOPE_STAFF,
+    ACCOUNT_SCOPE_REQUESTER,
+)
+
+DEFAULT_ACCOUNT_ROLE = ROLE_AGENT
+
+ACCOUNT_ROLE_LABELS = {
+    ROLE_USER: "User",
+    ROLE_COACH: "Coach",
+    ROLE_TUTOR: "Tutor",
+    ROLE_EMPLOYER: "Employer",
+    ROLE_ADMIN: "Admin",
+    ROLE_SUPERADMIN: "Super Admin",
+    ROLE_AGENT: "Agent",
+}
+
+ACCOUNT_SCOPE_LABELS = {
+    ACCOUNT_SCOPE_STAFF: "Staff",
+    ACCOUNT_SCOPE_REQUESTER: "Requester",
+}
+
+
+def derive_account_scope_from_role(role: str | None) -> str:
+    normalized_role = (role or "").strip().lower()
+    if normalized_role in PUBLIC_SUPPORT_ACCOUNT_ROLE_SET:
+        return ACCOUNT_SCOPE_REQUESTER
+    return ACCOUNT_SCOPE_STAFF

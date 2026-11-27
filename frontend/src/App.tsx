@@ -1,0 +1,59 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { Toaster as Sonner } from "@/components/ui/sonner";
+import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { SupportProvider } from "@/context/SupportContext";
+import NotFound from "./pages/NotFound.tsx";
+import EmailVerification from "./pages/support/EmailVerification.tsx";
+import InquiryDetails from "./pages/support/InquiryDetails.tsx";
+import SupportOptions from "./pages/support/SupportOptions.tsx";
+import ChatSupport from "./pages/support/ChatSupport.tsx";
+import EmbeddedBooking from "./pages/support/EmbeddedBooking.tsx";
+import BookingConfirmed from "./pages/support/BookingConfirmed.tsx";
+import TicketStatus from "./pages/support/TicketStatus.tsx";
+import MyTickets from "./pages/support/MyTickets.tsx";
+import Documentation from "./pages/support/Documentation.tsx";
+import AgentDashboard from "./pages/support/AgentDashboard.tsx";
+import AdminLogin from "./pages/support/AdminLogin.tsx";
+import { RequireAdmin } from "./components/support/RequireAdmin.tsx";
+import LmsChat from "./pages/support/LmsChat.tsx";
+import KnowledgeBaseWorkspace from "./pages/knowledge-base/KnowledgeBaseWorkspace.tsx";
+import KnowledgeBaseArticle from "./pages/knowledge-base/KnowledgeBaseArticle.tsx";
+
+const queryClient = new QueryClient();
+const supportDashboardRoles = ["agent", "admin", "superadmin"] as const;
+
+const App = () => (
+  <QueryClientProvider client={queryClient}>
+    <TooltipProvider>
+      <Toaster />
+      <Sonner />
+      <SupportProvider>
+        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Routes>
+            <Route path="/" element={<EmailVerification />} />
+            <Route path="/lms" element={<LmsChat />} />
+            <Route path="/support" element={<Navigate to="/" replace />} />
+            <Route path="/support/inquiry" element={<InquiryDetails />} />
+            <Route path="/support/options" element={<SupportOptions />} />
+            <Route path="/support/chat" element={<ChatSupport />} />
+            <Route path="/support/booking" element={<EmbeddedBooking />} />
+            <Route path="/support/booking-confirmed" element={<BookingConfirmed />} />
+            <Route path="/support/status" element={<TicketStatus />} />
+            <Route path="/support/my-tickets" element={<MyTickets />} />
+            <Route path="/support/docs" element={<Documentation />} />
+            <Route path="/admin/login" element={<AdminLogin />} />
+            <Route path="/admin" element={<RequireAdmin allowedRoles={supportDashboardRoles}><AgentDashboard /></RequireAdmin>} />
+            <Route path="/agent" element={<RequireAdmin allowedRoles={supportDashboardRoles}><AgentDashboard /></RequireAdmin>} />
+            <Route path="/knowledge-base" element={<RequireAdmin><KnowledgeBaseWorkspace /></RequireAdmin>} />
+            <Route path="/knowledge-base/articles/:fileName" element={<RequireAdmin><KnowledgeBaseArticle /></RequireAdmin>} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </SupportProvider>
+    </TooltipProvider>
+  </QueryClientProvider>
+);
+
+export default App;
